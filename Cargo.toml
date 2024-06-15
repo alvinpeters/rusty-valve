@@ -1,0 +1,54 @@
+[package]
+name = "rusty-valve"
+authors = ["Alvin Peters <me@alvinpeters.dev>"]
+repository = "https://github.com/alvinpeters/rusty-valve"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+#default = ["clustering", "gatekeeper", "load_balancer"]
+#clustering = ["foundationdb"]
+#gatekeeper = []
+load_balancer = []
+
+[dependencies]
+# Async
+tokio = { version = "1.38.0", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "signal", "sync", "io-std"]}
+tokio-util = { version = "0.7.11", features = ["time"]}
+# Config
+configparser = "3.1.0"
+clap = { version = "4.5.8", features = ["derive"] }
+# Error handling
+thiserror = "1.0.61"
+anyhow = "1.0.86"
+# Logging
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["time", "fmt"]}
+tracing-appender = "0.2.3"
+time = { version = "0.3.36", features = ["formatting", "parsing", "local-offset"] }
+# rustls for TLS SNI inspection
+rustls = "0.23.10"
+tokio-rustls = "0.26.0"
+# quinn for QUIC
+quinn = "0.11.2"
+indexset = "0.4.0"
+
+# HTTP client for the embedded certbot
+
+[lints.rust]
+# TODO: Remove after testing
+#unused = "allow"
+#unused = "forbid"
+unsafe_code = "forbid"
+
+
+#bytes = "1.6.0"
+#http = "1.1.0"
+#structopt = "0.3.26"
+#h3 = "0.0.5"
+#h3-quinn = { version = "0.0.6"}
+#quinn = { version = "0.11.2", features = ["rustls", "runtime-tokio"] }
+
+#foundationdb = { version = "0.9.0", features = ["fdb-7_1", "embedded-fdb-include"], optional = true }
+#base64 = "0.22.1"
+#rustls-native-certs = "0.7.0"

@@ -1,0 +1,7 @@
+/target
+
+# IDEA
+/.idea/
+
+# Ignore anything that looks like a log file
+*.log*

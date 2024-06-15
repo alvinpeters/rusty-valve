@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+#
+
+# PROVIDE: rusty_valve
+# REQUIRE: DAEMON
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name=rusty_valve
+_binname=rusty-valve
+rcvar=${name}_enable
+
+config_file="%%PREFIX%%/${name}/config.ini"
+
+load_rc_config $name
+: ${rusty_valve_enable:="NO"}
+
+pidfile="/var/run/${name}.pid"
+procname="%%PREFIX%%/bin/${_binname}"
+procargs="--config ${config_file}"
+
+command="/usr/sbin/daemon"
+command_args="-r -p ${pidfile} ${procname} ${procargs}"
+
+run_rc_command "$1"
