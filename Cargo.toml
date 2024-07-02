@@ -2,7 +2,7 @@
 name = "rusty-valve"
 authors = ["Alvin Peters <me@alvinpeters.dev>"]
 repository = "https://github.com/alvinpeters/rusty-valve"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [features]

@@ -12,7 +12,7 @@ name=rusty_valve
 _binname=rusty-valve
 rcvar=${name}_enable
 
-config_file="%%PREFIX%%/${name}/config.ini"
+config_file="%%PREFIX%%/etc/${_binname}/config.conf"
 
 load_rc_config $name
 : ${rusty_valve_enable:="NO"}
