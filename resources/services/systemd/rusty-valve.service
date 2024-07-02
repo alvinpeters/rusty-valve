@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the rusty valve
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rusty-valve --config /usr/local/etc/rusty-valve/config.conf
+
+[Install]
+WantedBy=multi-user.target

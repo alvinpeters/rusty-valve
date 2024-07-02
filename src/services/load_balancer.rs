@@ -12,7 +12,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::Receiver;
 use tokio_util::sync::CancellationToken;
 use tokio_util::time::FutureExt;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, Level, span, trace, warn};
 use crate::connection::{ConnectionInner, Destination, ForwardedConnection};
 use crate::services::Service;
 use crate::utils::task_tracker::TaskTracker;
@@ -51,7 +51,8 @@ impl Service for LoadBalancer {
         while let Some(conn) = self.conn_receiver.recv().await {
             let machines = self.machines.clone();
             self.conn_tracker.spawn_with_tracker(|tracker| async move {
-                trace!("why no spawn :(");
+                let span = span!(Level::TRACE, "load balancer connection", remote_connection = &conn.remote_socket.to_string());
+                let _span_guard = span.enter();
                 handle_connection(conn, machines).await;
                 // TODO: Figure out a way to keep the tracker from dropping without a guard
                 let _tracker_guard = tracker;
@@ -134,7 +135,7 @@ impl DestinationConnection {
     async fn negotiate_destination(destination: Destination, dest_addrs: Arc<BTreeMap<IpAddr, DestinationMachine>>) -> Option<Self> {
         match destination {
             Destination::PortOnly(port) => {
-                debug!("bruhs");
+                trace!("got a port-only destination. attempting to find the best machine");
                 let sorted_machines = pick_best_ip(None, &dest_addrs);
                 return Self::attempt_tcp_connections(sorted_machines, port).await;
             },
@@ -178,6 +179,7 @@ impl DestinationConnection {
     }
 
     async fn attempt_tcp_connection(socket_addr: &SocketAddr) -> Option<DestinationConnectionInner> {
+        trace!("attempting connection to {}", socket_addr);
         let Ok(tcp_conn_timeout) = TcpStream::connect(socket_addr).timeout(Duration::from_secs(5)).await else {
             debug!("timed out making a TCP connection to {}", socket_addr);
             return None
