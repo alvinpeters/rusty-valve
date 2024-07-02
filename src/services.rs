@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use anyhow::{anyhow, Context, Result};
 use tokio_util::sync::CancellationToken;
+use tracing::trace;
 use crate::connection::ForwardedConnection;
 use crate::services::gatekeeper_auth::GatekeeperAuth;
 use crate::services::load_balancer::LoadBalancer;

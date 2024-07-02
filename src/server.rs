@@ -133,16 +133,12 @@ pub(crate) struct Server {
     listeners: ListenerInner,
     settings: ServerSettings,
     lb_ip_addrs: Vec<IpAddr>,
-    tls_sni_handler: Option<TlsRpHandler>,
-    simple_tcp_handler: Option<SimpleTcpHandler>,
     forward_table: ServiceForwardTable,
     load_balancer: Option<LoadBalancer>,
     conn_waiter: TaskWaiter,
 }
 
 pub(crate) struct BoundServer {
-    tls_sni_handler: Option<BoundTlsRpHandler>,
-    simple_tcp_handler: Option<BoundSimpleTcpHandler>,
     forward_table: ServiceForwardTable,
     load_balancer: Option<LoadBalancer>,
     conn_waiter: TaskWaiter,
@@ -152,7 +148,6 @@ impl Server {
     pub(crate) fn new(config: &mut Config) -> Result<Self> {
         let conn_waiter = TaskWaiter::new(Some(5000));
         let mut forward_table_builder = ServiceForwardTableBuilder::new();
-        let mut tls_sni_handler = None;
 
         let load_balancer_config = config.load_balancer_config.take();
 
@@ -164,13 +159,12 @@ impl Server {
         forward_table_builder.add(InternalService::LoadBalancer, lb_sender)?;
         // Finish services here
         let forward_table = forward_table_builder.build();
+        let listeners = ListenerInner::new(config, &forward_table)?;
 
         let server = Server {
-            listeners: ListenerInner::new(config, &forward_table)?,
+            listeners,
             settings: config.server_settings.take().ok_or(anyhow!("server settings missing from config"))?,
             lb_ip_addrs: vec![],
-            tls_sni_handler,
-            simple_tcp_handler: None,
             forward_table,
             load_balancer,
             conn_waiter,
@@ -188,7 +182,9 @@ impl Server {
 
     pub(crate) async fn run(mut self) -> Result<()> {
         //let mut conn_set = JoinSet::new();
-        self.listeners.listen().await?;
+        let listeners =  self.listeners.listen();
+        let lb = self.load_balancer.unwrap().run();
+        let (_res1, _res2) = join!(listeners, lb);
         Ok(())
     }
 

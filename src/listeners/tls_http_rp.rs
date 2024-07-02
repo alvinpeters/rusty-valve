@@ -186,10 +186,11 @@ pub(crate) async fn get_backend_port(
     let dest =  res.get_only_destination().clone();
     let conn = ForwardedConnection::new_tcp_conn(tcp_stream, remote_addr, settings.connection_settings, dest);
     // Send it to the server thread for forwarding
+    trace!("attempting to send {} to the load balancer", remote_addr);
     if let Err(e) = forward_sender.forward_conn(&InternalService::LoadBalancer, conn).await {
         debug!("Failed to send the connection from {}: {}", remote_addr, e);
     }
-
+    trace!("remote {} has been sent to the load balancer", remote_addr);
 }
 
 async fn extract_sni_from_tls_ch(

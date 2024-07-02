@@ -49,10 +49,12 @@ impl Service for LoadBalancer {
 
     async fn run(mut self) -> Result<()> {
         while let Some(conn) = self.conn_receiver.recv().await {
+            trace!("received");
             let machines = self.machines.clone();
             self.conn_tracker.spawn_with_tracker(|tracker| async move {
-                let span = span!(Level::TRACE, "load balancer connection", remote_connection = &conn.remote_socket.to_string());
+                let span = span!(Level::TRACE, "forwarding", remote_connection = &conn.remote_socket.to_string());
                 let _span_guard = span.enter();
+                trace!("received");
                 handle_connection(conn, machines).await;
                 // TODO: Figure out a way to keep the tracker from dropping without a guard
                 let _tracker_guard = tracker;
@@ -67,7 +69,6 @@ async fn handle_connection(conn: ForwardedConnection, addresses: Arc<BTreeMap<Ip
     let Some(dest_conn) = DestinationConnection::negotiate_destination(conn.destination, addresses).await else {
         return;
     };
-    debug!("bruhs");
     dest_conn.connect_to_machine(conn.inner, conn.remote_socket).await;
 }
 

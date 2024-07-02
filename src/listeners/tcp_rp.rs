@@ -130,6 +130,7 @@ pub(crate) async fn listen_tcp(
             debug!("Failed to accept stream");
             continue;
         };
+        trace!("got remote TCP connection from {}", remote);
         // do gatekeeper stuff here
         let dest = if forward_sender.has_service(&InternalService::GatekeeperAuth) {
             // get gatekeeper stuff here, assume it returns true for now
