@@ -1,26 +1,27 @@
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::net::{IpAddr, SocketAddr};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use rustls::server::Acceptor;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 use tokio_rustls::LazyConfigAcceptor;
 use tokio_util::time::FutureExt;
-use crate::config::settings::ConnectionSettings;
+use crate::config::settings::{BindSettings, ConnectionSettings};
 use crate::connection::{Destination, ForwardedConnection, PossibleDestinations};
 
 use crate::listeners::{ListenerHandler, BoundListenerHandler};
 use crate::services::{InternalService, ServiceForwardTable};
 
 pub(crate) struct SimpleTcpHandlerConfig {
-    connection_settings: ConnectionSettings,
-    destination_provider: Vec<(u16, PossibleDestinations)>,
+    pub(crate) connection_settings: ConnectionSettings,
+    pub(crate) destination_provider: Vec<(u16, PossibleDestinations)>,
 }
 
 pub(crate) struct SimpleTcpHandler {
@@ -38,7 +39,7 @@ pub(crate) struct BoundSimpleTcpHandler {
 impl ListenerHandler for SimpleTcpHandler {
     type Config = SimpleTcpHandlerConfig;
     type BoundListenerHandler = BoundSimpleTcpHandler;
-    type ListenAddrProvider = Vec<IpAddr>;
+    type ListenAddrProvider = BindSettings;
     type ForwardSender = ServiceForwardTable;
     type DestinationProvider = Vec<(u16, PossibleDestinations)>;
 
@@ -56,11 +57,11 @@ impl ListenerHandler for SimpleTcpHandler {
 
     async fn bind(mut self, mut socket_provider: Self::ListenAddrProvider) -> Result<Self::BoundListenerHandler> {
         trace!(listener="simple TCP reverse proxy", "binding listener");
-        let mut ip_addrs = socket_provider;
+        let mut ip_addrs = socket_provider.bind_ip_addrs.deref();
         let mut listeners = Vec::new();
-        while let Some(ip_addr) = ip_addrs.pop() {
+        for ip_addr in ip_addrs {
             while let Some((src_port, dest)) = self.destination_provider.pop() {
-                let socket_addr = SocketAddr::new(ip_addr, src_port.to_owned());
+                let socket_addr = SocketAddr::new(*ip_addr, src_port.to_owned());
                 let listener = TcpListener::bind(socket_addr).await?;
                 listeners.push((listener, (src_port, dest)));
             }
@@ -80,6 +81,7 @@ impl BoundListenerHandler for BoundSimpleTcpHandler {
     async fn listen(mut self) -> Result<()> {
         let mut listener_set = JoinSet::new();
         while let Some((listener, (src_port, dest))) = self.listeners.pop() {
+            info!("now listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or("N/A".to_string()));
             listener_set.spawn(
                 listen_tcp(
                     listener,

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 use anyhow::{anyhow, Result};
+use tokio::join;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
@@ -47,13 +48,13 @@ impl ListenerInner {
             None => None,
             Some(c) => Some(SimpleTcpHandler::new(c, forward_table.clone())?)
         };
-        if tls_sni_handler.is_none() && simple_tcp_handler.is_none() {
+        if tls_sni_handler.is_none() || simple_tcp_handler.is_none() {
             error!("you can't just run a server without a single listener");
             return Err(anyhow!("nothing to listen on"));
         };
         let unbound_listeners = UnboundListeners {
             tls_sni_handler,
-            simple_tcp_handler: None,
+            simple_tcp_handler,
         };
         Ok(Self::Unbound(unbound_listeners))
     }
@@ -69,9 +70,13 @@ impl ListenerInner {
             None => None,
             Some(h) => {Some(h.bind(bind_settings.clone()).await?)}
         };
+        let simple_tcp_handler = match unbound_listeners.simple_tcp_handler {
+            None => None,
+            Some(h) => {Some(h.bind(bind_settings.clone()).await?)}
+        };
         let bound_listeners = BoundListeners {
             tls_sni_handler,
-            simple_tcp_handler: None,
+            simple_tcp_handler,
         };
         Ok(Self::Bound(bound_listeners))
     }
@@ -87,15 +92,45 @@ impl ListenerInner {
             None => None,
             Some(h) => {Some(h.unbind())}
         };
+        let simple_tcp_handler = match bound_listeners.simple_tcp_handler {
+            None => None,
+            Some(h) => {Some(h.unbind())}
+        };
         let unbound_listeners = UnboundListeners {
             tls_sni_handler,
-            simple_tcp_handler: None,
+            simple_tcp_handler,
         };
         Ok(Self::Unbound(unbound_listeners))
+    }
+
+    async fn listen(self) -> Result<Self> {
+        let ListenerInner::Bound(mut listeners) = self else {
+            error!("binding error");
+            return Err(anyhow!("listeners are currently not bound"));
+        };
+        let tls_http_rp = {
+            if let Some(tls_http) = listeners.tls_sni_handler {
+                tokio::task::spawn(tls_http.listen())
+            } else {
+                panic!("aaaa")
+            }
+        };
+        let tcp_rp = if let Some(tcp) = listeners.simple_tcp_handler {
+            tokio::task::spawn(tcp.listen())
+        } else {
+            panic!("aaaa")
+        };
+        let (res2, res1) = join!(tls_http_rp, tcp_rp);
+        let bound_listeners = BoundListeners {
+            tls_sni_handler: None,
+            simple_tcp_handler: None,
+        };
+        Ok(Self::Bound(bound_listeners))
     }
 }
 
 pub(crate) struct Server {
+    listeners: ListenerInner,
     settings: ServerSettings,
     lb_ip_addrs: Vec<IpAddr>,
     tls_sni_handler: Option<TlsRpHandler>,
@@ -118,9 +153,7 @@ impl Server {
         let conn_waiter = TaskWaiter::new(Some(5000));
         let mut forward_table_builder = ServiceForwardTableBuilder::new();
         let mut tls_sni_handler = None;
-        
-        let tls_lb_config = config.tls_rp_config.take();
-        let tcp_lb_config = config.tcp_rp_config.take();
+
         let load_balancer_config = config.load_balancer_config.take();
 
         let (lb_sender, lb_receiver) = mpsc::channel(50);
@@ -131,12 +164,9 @@ impl Server {
         forward_table_builder.add(InternalService::LoadBalancer, lb_sender)?;
         // Finish services here
         let forward_table = forward_table_builder.build();
-        tls_sni_handler = match tls_lb_config {
-            None => None,
-            Some(c) => Some(TlsRpHandler::new(c, forward_table.clone())?)
-        };
 
         let server = Server {
+            listeners: ListenerInner::new(config, &forward_table)?,
             settings: config.server_settings.take().ok_or(anyhow!("server settings missing from config"))?,
             lb_ip_addrs: vec![],
             tls_sni_handler,
@@ -146,47 +176,21 @@ impl Server {
             conn_waiter,
         };
 
-        if server.tls_sni_handler.is_none() && server.simple_tcp_handler.is_none() && server.load_balancer.is_none() {
-            error!("you can't just run a server without a service");
-            return Err(anyhow!("nothing to run"));
-        };
-
         Ok(server)
     }
 
     /// Binds to sockets
-    pub(super) async fn bind(mut self, bind_settings: BindSettings) -> Result<BoundServer> {
+    pub(super) async fn bind(mut self, bind_settings: BindSettings) -> Result<Self> {
         trace!("binding listeners");
-        let tls_sni_handler = match self.tls_sni_handler {
-            None => None,
-            Some(h) => {Some(h.bind(bind_settings.clone()).await?)}
-        };
-        Ok(
-            BoundServer {
-                tls_sni_handler,
-                simple_tcp_handler: None,
-                forward_table: self.forward_table,
-                load_balancer: self.load_balancer,
-                conn_waiter: self.conn_waiter,
-            }
-        )
+        self.listeners = self.listeners.bind(bind_settings).await?;
+        Ok(self)
     }
 
-}
-
-impl BoundServer {
     pub(crate) async fn run(mut self) -> Result<()> {
-        let mut listener_set = JoinSet::new();
         //let mut conn_set = JoinSet::new();
-        if let Some(lb) = self.load_balancer {
-            listener_set.spawn(lb.run());
-        }
-        if let Some(t) = self.tls_sni_handler {
-            listener_set.spawn(t.listen());
-        }
-        while let Some(res) = listener_set.join_next().await {
-
-        }
+        self.listeners.listen().await?;
         Ok(())
     }
+
 }
+

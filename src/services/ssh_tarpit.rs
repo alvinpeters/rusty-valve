@@ -17,8 +17,8 @@ use crate::services::{Service, ssh_tarpit};
 use crate::utils::task_tracker::TaskTracker;
 
 pub(crate) struct SshTarpitConfig {
-    max_connections: usize,
-    banner_repeat_time: Duration,
+    pub(crate) max_connections: usize,
+    pub(crate) banner_repeat_time: Duration,
 }
 
 #[derive(Copy, Clone)]
@@ -29,7 +29,6 @@ struct Settings {
 
 pub(crate) struct SshTarpit {
     settings: Settings,
-    custom_banners: Option<Arc<Vec<String>>>,
     forward_receiver: Receiver<ForwardedConnection>,
     conn_tracker: TaskTracker,
 }
@@ -45,7 +44,6 @@ impl Service for SshTarpit {
         };
         let ssh_tarpit = SshTarpit {
             settings,
-            custom_banners: None,
             forward_receiver,
             conn_tracker: task_tracker,
         };

@@ -4,7 +4,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::net::IpAddr;
 use std::path::PathBuf;
-
+use std::time::Duration;
 use anyhow::{anyhow, Result};
 use configparser::ini::{Ini, IniDefault};
 use tracing::Level;
@@ -128,6 +128,18 @@ impl TryFromConfig<String> for IpAddr {
 impl TryFromConfig<String> for u16 {
     fn try_from_config(value: String) -> Result<Self> {
         Ok(value.parse()?)
+    }
+}
+
+impl TryFromConfig<String> for usize {
+    fn try_from_config(value: String) -> Result<Self> {
+        Ok(value.parse()?)
+    }
+}
+
+impl TryFromConfig<String> for Duration {
+    fn try_from_config(value: String) -> Result<Self> {
+        Ok(Duration::from_secs(value.parse()?))
     }
 }
 
