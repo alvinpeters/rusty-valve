@@ -4,8 +4,8 @@ A homemade forwarder and reverse proxy.
 ## Current features:
 - Transparent reverse proxy through peeking for
 TLS Server Name Indication or HTTP Host header
-- INI config
+- INI config with command line options
 
 ## To do's:
-- [ ] Make
-- [ ] Make an actual load balancer
+- [x] Make an actual load balancer
+- [ ] Finish gatekeepr

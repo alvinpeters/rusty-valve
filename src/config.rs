@@ -86,7 +86,12 @@ impl ConfigBuilder {
 
     pub(crate) fn get_opts(mut self) -> Result<Self> {
         let args = Options::parse();
-        self.config_file_path = args.config;
+        #[cfg(debug_assertions)] {
+            self.config_file_path = Some(PathBuf::from_str("resources/config/config.ini")?);
+        }
+        #[cfg(not(debug_assertions))] {
+            self.config_file_path = args.config;
+        }
         Ok(self)
     }
 
