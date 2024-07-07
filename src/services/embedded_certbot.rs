@@ -4,17 +4,17 @@ use anyhow::Result;
 
 use crate::connection::ForwardedConnection;
 use crate::services::Service;
-use crate::utils::task_tracker::TaskTracker;
+use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
 
 struct EmbeddedCertbot {
 
 }
 
 impl Service for EmbeddedCertbot {
-    const CONFIG_NAME: &'static str = "certbot";
+    const SLUG_NAME: &'static str = "certbot";
     type Config = ();
 
-    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracler: TaskTracker) -> Result<Self> {
+    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracker: ConnTracker) -> Result<Self> {
         todo!()
     }
 

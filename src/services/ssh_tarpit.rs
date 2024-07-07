@@ -8,13 +8,14 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, Level, span, trace};
 use anyhow::Result;
 use clap::ArgAction::Set;
 use tokio::time::sleep;
 use crate::connection::{ConnectionInner, ForwardedConnection};
 use crate::services::{Service, ssh_tarpit};
-use crate::utils::task_tracker::TaskTracker;
+use crate::services::ssh_tarpit::bee_movie::TRANSCRIPT;
+use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
 
 pub(crate) struct SshTarpitConfig {
     pub(crate) max_connections: usize,
@@ -30,14 +31,14 @@ struct Settings {
 pub(crate) struct SshTarpit {
     settings: Settings,
     forward_receiver: Receiver<ForwardedConnection>,
-    conn_tracker: TaskTracker,
+    conn_tracker: ConnTracker,
 }
 
 impl Service for SshTarpit {
-    const CONFIG_NAME: &'static str = "ssh-tarpit";
+    const SLUG_NAME: &'static str = "ssh-tarpit";
     type Config = SshTarpitConfig;
 
-    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracker: TaskTracker) -> Result<Self> {
+    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, conn_tracker: ConnTracker) -> Result<Self> {
         let settings = Settings {
             max_connections: config.max_connections,
             banner_repeat_time: config.banner_repeat_time,
@@ -45,18 +46,19 @@ impl Service for SshTarpit {
         let ssh_tarpit = SshTarpit {
             settings,
             forward_receiver,
-            conn_tracker: task_tracker,
+            conn_tracker,
         };
         Ok(ssh_tarpit)
     }
 
     async fn run(mut self) -> Result<()> {
         while let Some(conn) = self.forward_receiver.recv().await {
+            let _span = span!(Level::TRACE, Self::SLUG_NAME, remote=conn.remote_socket).entered();
             let (ConnectionInner::Tcp(tcp_conn), remote_socket, b) = conn.into_inner() else {
                 // Not the right type, no point handling it.
                 continue;
             };
-            info!("a victim from {} has fallen to the SSH tarpit", remote_socket);
+
             let mut stream = tcp_conn.tcp_stream;
             self.conn_tracker.spawn_with_tracker(move |tracker| async move {
                 tarpit(tracker, stream, self.settings).await
@@ -68,23 +70,19 @@ impl Service for SshTarpit {
 }
 
 async fn tarpit(conn_tracker: TaskTracker, mut tcp_stream: TcpStream, settings: Settings) {
-    loop {
-        if conn_tracker.current_task_count() >= settings.max_connections {
-            return;
+    if conn_tracker.current_task_count() >= settings.max_connections {
+        return;
+    }
+
+    // basically an infinite loop
+    for line in TRANSCRIPT.iter().cycle() {
+        if let Err(e) = tcp_stream.writable().await {
+            trace!("got an error waiting for the stream to be writable: {}", e);
+            break;
         }
-        let buf = bee_movie::TRANSCRIPT.lines();
-        // basically an infinite loop
-        for line_res in buf {
-            let Ok(line) = line_res else {
-                return;
-            };
-            if let Err(e) = tcp_stream.writable().await {
-                break;
-            }
-            if let Err(e) = tcp_stream.write(line.as_bytes()).await {
-                break;
-            }
-            sleep(settings.banner_repeat_time).await;
+        if let Err(e) = tcp_stream.write(line.as_bytes()).await {
+            trace!("got an error writing to the stream: {}", e);
         }
+        sleep(settings.banner_repeat_time).await;
     }
 }

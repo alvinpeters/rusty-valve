@@ -10,6 +10,7 @@ use tokio::signal::unix::SignalKind;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, Subscriber, trace, warn};
 use tracing_subscriber::{filter, Layer, Registry};
 use tracing_subscriber::fmt::format::{Format, Pretty};
@@ -51,6 +52,7 @@ async fn main() -> Result<()> {
     // Then build config
     let mut config = config_builder.build()?;
 
+    let task_tracker = TaskTracker::new();
 
     let mut server = match Server::new(&mut config) {
         Ok(s) => s,

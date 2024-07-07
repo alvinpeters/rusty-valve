@@ -16,7 +16,7 @@ use crate::listeners::tcp_rp::{BoundSimpleTcpHandler, SimpleTcpHandler};
 use crate::listeners::tls_http_rp::{BoundTlsRpHandler, TlsRpHandler};
 use crate::services::{InternalService, Service, ServiceForwardTable, ServiceForwardTableBuilder};
 use crate::services::load_balancer::LoadBalancer;
-use crate::utils::task_tracker::{TaskTracker, TaskWaiter};
+use crate::utils::conn_tracker::ConnTracker;
 
 #[derive(Copy, Clone)]
 pub(crate) struct ServerSettings {
@@ -135,18 +135,11 @@ pub(crate) struct Server {
     lb_ip_addrs: Vec<IpAddr>,
     forward_table: ServiceForwardTable,
     load_balancer: Option<LoadBalancer>,
-    conn_waiter: TaskWaiter,
-}
-
-pub(crate) struct BoundServer {
-    forward_table: ServiceForwardTable,
-    load_balancer: Option<LoadBalancer>,
-    conn_waiter: TaskWaiter,
+    conn_tracker: ConnTracker,
 }
 
 impl Server {
-    pub(crate) fn new(config: &mut Config) -> Result<Self> {
-        let conn_waiter = TaskWaiter::new(Some(5000));
+    pub(crate) fn new(config: &mut Config, conn_tracker: ConnTracker) -> Result<Self> {
         let mut forward_table_builder = ServiceForwardTableBuilder::new();
 
         let load_balancer_config = config.load_balancer_config.take();
@@ -154,7 +147,7 @@ impl Server {
         let (lb_sender, lb_receiver) = mpsc::channel(50);
         let load_balancer = match load_balancer_config {
             None => None,
-            Some(c) => Some(LoadBalancer::new(c, lb_receiver, conn_waiter.create_tracker())?)
+            Some(c) => Some(LoadBalancer::new(c, lb_receiver, conn_tracker.child())?)
         };
         forward_table_builder.add(InternalService::LoadBalancer, lb_sender)?;
         // Finish services here
@@ -167,7 +160,7 @@ impl Server {
             lb_ip_addrs: vec![],
             forward_table,
             load_balancer,
-            conn_waiter,
+            conn_tracker,
         };
 
         Ok(server)

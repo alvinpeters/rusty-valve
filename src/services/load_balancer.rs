@@ -5,18 +5,19 @@ use std::net::{IpAddr, SocketAddr};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::atomic::Ordering::{Relaxed, SeqCst};
+use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
 use std::time::{Duration, Instant};
 use tokio::io::copy_bidirectional;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Receiver;
 use tokio_util::sync::CancellationToken;
 use tokio_util::time::FutureExt;
-use tracing::{debug, error, Level, span, trace, warn};
+use tracing::{debug, debug_span, error, Instrument, Level, span, trace, warn};
 use crate::connection::{ConnectionInner, Destination, ForwardedConnection};
 use crate::services::Service;
-use crate::utils::task_tracker::TaskTracker;
+use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
 use anyhow::Result;
+use tokio::task::JoinHandle;
 
 pub(crate) struct LoadBalancerConfig {
     pub(crate) addresses: Vec<IpAddr>
@@ -26,14 +27,14 @@ pub(crate) struct LoadBalancerConfig {
 pub(crate) struct LoadBalancer {
     conn_receiver: Receiver<ForwardedConnection>,
     machines: Arc<BTreeMap<IpAddr, DestinationMachine>>,
-    conn_tracker: TaskTracker,
+    conn_tracker: ConnTracker,
 }
 
 impl Service for LoadBalancer {
-    const CONFIG_NAME: &'static str = "load-balancer";
+    const SLUG_NAME: &'static str = "load-balancer";
     type Config = LoadBalancerConfig;
 
-    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracker: TaskTracker) -> Result<Self> {
+    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, conn_tracker: ConnTracker) -> Result<Self> {
         let mut machines = BTreeMap::new();
         for ip_addr in config.addresses {
             let machine = DestinationMachine::new(1);
@@ -42,22 +43,18 @@ impl Service for LoadBalancer {
         let load_balancer = Self {
             conn_receiver: forward_receiver,
             machines: Arc::new(machines),
-            conn_tracker: task_tracker,
+            conn_tracker,
         };
         Ok(load_balancer)
     }
 
     async fn run(mut self) -> Result<()> {
         while let Some(conn) = self.conn_receiver.recv().await {
-            trace!("received");
             let machines = self.machines.clone();
-            self.conn_tracker.spawn_with_tracker(|tracker| async move {
+            self.conn_tracker.spawn(async move {
                 let span = span!(Level::TRACE, "forwarding", remote_connection = &conn.remote_socket.to_string());
-                let _span_guard = span.enter();
                 trace!("received");
-                handle_connection(conn, machines).await;
-                // TODO: Figure out a way to keep the tracker from dropping without a guard
-                let _tracker_guard = tracker;
+                handle_connection(conn, machines).instrument(span).await;
             });
         }
         Ok(())
@@ -66,16 +63,97 @@ impl Service for LoadBalancer {
 
 async fn handle_connection(conn: ForwardedConnection, addresses: Arc<BTreeMap<IpAddr, DestinationMachine>>) {
     debug!("bruhawtwats");
+    match conn.destination {
+        Destination::PortOnly(port) => {
+            trace!("got a port-only destination. attempting to find the best machine");
+            let sorted_machines = pick_best_ip(None, &addresses);
+            for (ip, machine) in sorted_machines {
+                let socket_addr = SocketAddr::new(ip.clone(), port);
+                if let Some(success) = machine.connect(conn.inner) {
+                    return;
+                };
+                continue;
+            }
+            return Self::attempt_tcp_connections(sorted_machines, port).await;
+        },
+        Destination::Socket(socket) => {
+            let Some(machine) = dest_addrs.get(&socket.ip()) else {
+                warn!("requested destination socket {} IP is not one of the machines!", socket);
+                return None;
+            };
+            if let Some(success) = machine.connect(destination).await {
+                let dest = Self {
+                    inner: success,
+                    machine: machine.clone(),
+                    socket_addr: socket,
+                };
+                return Some(dest);
+            };
+            debug!("failed to connect");
+        },
+        Destination::PortAndAddrs(port, addrs) => {
+            let sorted_machines = pick_best_ip(Some(addrs), &dest_addrs);
+            return Self::attempt_tcp_connections(sorted_machines, port).await;
+        }
+        _ => {
+            //error!("received connection from {} but the load balancer cannot send it to {}", co.remote_socket, conn.destination);
+        }
+    }
+
     let Some(dest_conn) = DestinationConnection::negotiate_destination(conn.destination, addresses).await else {
         return;
     };
+
     dest_conn.connect_to_machine(conn.inner, conn.remote_socket).await;
+}
+
+async fn negotiate_destination(conn_inner: ConnectionInner, dest_addrs: Arc<BTreeMap<IpAddr, DestinationMachine>>) -> Option<Self> {
+    match destination {
+        Destination::PortOnly(port) => {
+            trace!("got a port-only destination. attempting to find the best machine");
+            let sorted_machines = pick_best_ip(None, &dest_addrs);
+            for (ip, machine) in sorted_machines {
+                let socket_addr = SocketAddr::new(ip.clone(), port);
+                if let Some(success) = machine.connect(conn_inner) {
+                    let dest_conn = Self::new(success, machine.clone(), socket_addr);
+                    return Some(dest_conn);
+                };
+                continue;
+            }
+
+        },
+        Destination::Socket(socket) => {
+            let Some(machine) = dest_addrs.get(&socket.ip()) else {
+                warn!("requested destination socket {} IP is not one of the machines!", socket);
+                return None;
+            };
+            if let Some(success) = machine.connect(destination).await {
+                let dest = Self {
+                    inner: success,
+                    machine: machine.clone(),
+                    socket_addr: socket,
+                };
+                return Some(dest);
+            };
+            debug!("failed to connect");
+        },
+        Destination::PortAndAddrs(port, addrs) => {
+            let sorted_machines = pick_best_ip(Some(addrs), &dest_addrs);
+            return Self::attempt_tcp_connections(sorted_machines, port).await;
+        }
+        _ => {
+            //error!("received connection from {} but the load balancer cannot send it to {}", co.remote_socket, conn.destination);
+            return None;
+        }
+    }
+    None
 }
 
 struct DestinationMachineInner {
     active_connections: AtomicUsize,
     reachable: AtomicBool,
     weight: usize,
+    task_tracker: TaskTracker,
 }
 
 #[derive(Clone)]
@@ -89,6 +167,7 @@ impl DestinationMachine {
             active_connections: Default::default(),
             reachable: Default::default(),
             weight,
+            task_tracker: TaskTracker::new()
         };
         Self {
             inner: Arc::new(inner)
@@ -100,7 +179,36 @@ impl DestinationMachine {
     }
 
     pub(crate) fn weighted_load(&self) -> usize {
-        self.inner.active_connections.load(SeqCst) * self.inner.weight
+        if self.available() {
+            self.inner.task_tracker.len() * self.inner.weight
+        } else {
+            usize::MAX
+        }
+    }
+
+    async fn connect(&self, conn_inner: ConnectionInner, socket_addr: SocketAddr) -> Option<JoinHandle<()>> {
+        match conn_inner {
+            ConnectionInner::Tcp(mut remote_stream) => {
+                let Ok(tcp_conn_timeout) = TcpStream::connect(socket_addr).timeout(Duration::from_secs(5)).await else {
+                    debug!("timed out making a TCP connection to {}", socket_addr);
+                    return None
+                };
+                let Ok(mut dest_stream) = tcp_conn_timeout else {
+                    debug!("failed to make TCP connection to {}", socket_addr);
+                    return None
+                };
+                let handle = self.inner.task_tracker.spawn(async move {
+                    let dest_span = debug_span!(LoadBalancer::SLUG_NAME, "Backend socket"=socket_addr);
+                    if let Err(e) = copy_bidirectional(&mut dest_stream, &mut remote_stream).instrument(dest_span).await {
+                        debug!("connection unceremoniously ended: {}", e);
+                    } else {
+                        trace!("connection gracefully ended");
+                    };
+                });
+                return Some(handle)
+            },
+            ConnectionInner::Quic => unimplemented!("QUIC not supported yet!")
+        };
     }
 
     pub(crate) fn add_conn(&self) {
@@ -121,15 +229,20 @@ pub(crate) enum DestinationConnectionInner {
 pub(crate) struct DestinationConnection {
     inner: DestinationConnectionInner,
     machine: DestinationMachine,
-    socket_addr: SocketAddr,
+}
+
+impl Drop for DestinationConnection {
+    fn drop(&mut self) {
+        self.machine.sub_conn();
+    }
 }
 
 impl DestinationConnection {
-    fn new(inner: DestinationConnectionInner, machine: DestinationMachine, socket_addr: SocketAddr) -> Self {
+    fn new(inner: DestinationConnectionInner, machine: DestinationMachine) -> Self {
+        machine.add_conn();
         Self {
             inner,
             machine,
-            socket_addr,
         }
     }
     
@@ -140,6 +253,7 @@ impl DestinationConnection {
                 let sorted_machines = pick_best_ip(None, &dest_addrs);
                 return Self::attempt_tcp_connections(sorted_machines, port).await;
             },
+
             Destination::Socket(socket) => {
                 let Some(machine) = dest_addrs.get(&socket.ip()) else {
                     warn!("requested destination socket {} IP is not one of the machines!", socket);

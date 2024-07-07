@@ -3,32 +3,24 @@ use std::fmt::{Debug, Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
-use std::vec;
 use anyhow::anyhow;
 use tokio::io::copy_bidirectional;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_util::time::FutureExt;
-use tracing::trace;
-use tracing_subscriber::fmt::format;
 use crate::config::settings::ConnectionSettings;
+use crate::connection::ConnectionInner::Tcp;
 use crate::services::gatekeeper_auth::GatekeeperAuth;
 use crate::services::load_balancer::LoadBalancer;
 use crate::services::{InternalService, Service};
 use crate::services::ssh_tarpit::SshTarpit;
-
-pub(crate) struct TcpConnection {
-    remote_socket: SocketAddr,
-    pub(crate) tcp_stream: TcpStream,
-}
 
 pub(crate) struct QuicConnection {
     source_id: SocketAddr,
 }
 
 pub(crate) enum ConnectionInner {
-    Tcp(TcpConnection),
+    Tcp(TcpStream),
     Quic,
 }
 
@@ -42,19 +34,11 @@ pub(crate) struct ForwardedConnection {
 impl ForwardedConnection {
     /// Wraps TCP stream to be handled later
     pub(crate) fn new_tcp_conn(tcp_stream: TcpStream, remote_socket: SocketAddr, settings: ConnectionSettings, destination: Destination) -> Self {
-        let inner = ConnectionInner::Tcp(TcpConnection {
-            remote_socket,
-            tcp_stream,
-        });
-        Self::new_conn_with_inner(inner, remote_socket, settings, destination)
+        Self::new_conn_with_inner(Tcp(tcp_stream), remote_socket, settings, destination)
     }
 
     pub(crate) fn new_quic_conn(tcp_stream: TcpStream, remote_socket: SocketAddr, settings: ConnectionSettings, destination: Destination) -> Self {
-        let inner = ConnectionInner::Tcp(TcpConnection {
-            remote_socket,
-            tcp_stream,
-        });
-        Self::new_conn_with_inner(inner, remote_socket, settings, destination)
+        unimplemented!("QUIC not implemented yet")
     }
 
     fn new_conn_with_inner(inner: ConnectionInner, remote_socket: SocketAddr, settings: ConnectionSettings, destination: Destination) -> Self {
@@ -68,38 +52,6 @@ impl ForwardedConnection {
 
     pub(crate) fn into_inner(self) -> (ConnectionInner, SocketAddr, ConnectionSettings) {
         (self.inner, self.remote_socket, self.settings)
-    }
-
-    pub(crate) async fn forward(mut self, destination_addr: IpAddr) {
-        let destination_socket = match self.destination {
-            Destination::PortOnly(port) => SocketAddr::new(destination_addr, port),
-            Destination::Socket(_) => todo!("can't be forwarded yet"),
-            Destination::PortAndAddrs(_, _) => todo!("can't be forwarded yet"),
-            _ => todo!()
-        };
-        match self.inner {
-            ConnectionInner::Tcp(mut conn) => {
-                let Ok(destination_connection)
-                    = TcpStream::connect(destination_socket).timeout(self.settings.timeout).await else
-                {
-                    // TODO: Warn: Timed out connecting after seconds
-                    return;
-                };
-                let mut destination_stream = match destination_connection {
-                    Ok(s) => s,
-                    Err(e) => {
-                        // TODO: Warn: Failed to connect to the target: e
-                        return;
-                    }
-                };
-                trace!("connecting remote {} and backend {}", self.remote_socket, destination_socket);
-                if let Err(e) = copy_bidirectional(&mut conn.tcp_stream, &mut destination_stream).await {
-                    // TODO: Warn: Connection broken: e
-                };
-            }
-            ConnectionInner::Quic => {}
-        }
-
     }
 }
 

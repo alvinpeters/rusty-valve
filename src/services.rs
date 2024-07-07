@@ -10,7 +10,7 @@ use crate::connection::ForwardedConnection;
 use crate::services::gatekeeper_auth::GatekeeperAuth;
 use crate::services::load_balancer::LoadBalancer;
 use crate::services::ssh_tarpit::SshTarpit;
-use crate::utils::task_tracker::TaskTracker;
+use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
 
 pub(crate) mod ssh_tarpit;
 pub(crate) mod gatekeeper_auth;
@@ -31,9 +31,9 @@ impl FromStr for InternalService {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            SshTarpit::CONFIG_NAME => Ok(Self::SshTarpit),
-            LoadBalancer::CONFIG_NAME => Ok(Self::LoadBalancer),
-            GatekeeperAuth::CONFIG_NAME => Ok(Self::GatekeeperAuth),
+            SshTarpit::SLUG_NAME => Ok(Self::SshTarpit),
+            LoadBalancer::SLUG_NAME => Ok(Self::LoadBalancer),
+            GatekeeperAuth::SLUG_NAME => Ok(Self::GatekeeperAuth),
             #[cfg(test)]
             "test-service" => Ok(Self::TestService),
             &_ => Err(anyhow!("{} does not match any existing services", s)),
@@ -44,9 +44,9 @@ impl FromStr for InternalService {
 impl Display for InternalService {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SshTarpit => write!(f, "{}", SshTarpit::CONFIG_NAME),
-            Self::LoadBalancer => write!(f, "{}", LoadBalancer::CONFIG_NAME),
-            Self::GatekeeperAuth => write!(f, "{}", GatekeeperAuth::CONFIG_NAME),
+            Self::SshTarpit => write!(f, "{}", SshTarpit::SLUG_NAME),
+            Self::LoadBalancer => write!(f, "{}", LoadBalancer::SLUG_NAME),
+            Self::GatekeeperAuth => write!(f, "{}", GatekeeperAuth::SLUG_NAME),
             #[cfg(test)]
             Self::TestService => write!(f, "test-service"),
         }
@@ -54,10 +54,10 @@ impl Display for InternalService {
 }
 
 pub(crate) trait Service: Sized {
-    const CONFIG_NAME: &'static str;
+    const SLUG_NAME: &'static str;
     type Config;
 
-    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracker: TaskTracker)
+    fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracker: ConnTracker)
            -> Result<Self>;
     async fn run(self) -> Result<()>
     ;

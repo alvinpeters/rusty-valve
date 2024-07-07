@@ -25,6 +25,6 @@ pub(crate) trait ListenerHandler {
 pub(crate) trait BoundListenerHandler {
     type ListenerHandler: ListenerHandler;
 
-    async fn listen(self) -> Result<()>;
+    async fn listen(self) -> Result<Self>;
     fn unbind(self) -> Self::ListenerHandler;
 }
