@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::connection::ForwardedConnection;
 use crate::services::Service;
-use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
+use crate::utils::conn_tracker::{ConnTracker};
 
 struct EmbeddedCertbot {
 

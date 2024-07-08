@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
@@ -15,9 +17,10 @@ use tokio_util::time::FutureExt;
 use tracing::{debug, debug_span, error, Instrument, Level, span, trace, warn};
 use crate::connection::{ConnectionInner, Destination, ForwardedConnection};
 use crate::services::Service;
-use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
-use anyhow::Result;
+use crate::utils::conn_tracker::{ConnTracker};
+use anyhow::{anyhow, Result};
 use tokio::task::JoinHandle;
+use tokio_util::task::TaskTracker;
 
 pub(crate) struct LoadBalancerConfig {
     pub(crate) addresses: Vec<IpAddr>
@@ -61,96 +64,109 @@ impl Service for LoadBalancer {
     }
 }
 
-async fn handle_connection(conn: ForwardedConnection, addresses: Arc<BTreeMap<IpAddr, DestinationMachine>>) {
-    debug!("bruhawtwats");
+async fn handle_connection(mut conn: ForwardedConnection, addresses: Arc<BTreeMap<IpAddr, DestinationMachine>>) {
     match conn.destination {
         Destination::PortOnly(port) => {
             trace!("got a port-only destination. attempting to find the best machine");
-            let sorted_machines = pick_best_ip(None, &addresses);
-            for (ip, machine) in sorted_machines {
-                let socket_addr = SocketAddr::new(ip.clone(), port);
-                if let Some(success) = machine.connect(conn.inner) {
-                    return;
-                };
-                continue;
+            let mut sorted_machines = pick_best_ip(None, &addresses);
+            sorted_machines.reverse();
+            if let Err(e) = attempt_connections(conn.inner, port, sorted_machines).await {
+                debug!("failed to connect to the backend: {}", e);
+                return;
             }
-            return Self::attempt_tcp_connections(sorted_machines, port).await;
         },
-        Destination::Socket(socket) => {
-            let Some(machine) = dest_addrs.get(&socket.ip()) else {
-                warn!("requested destination socket {} IP is not one of the machines!", socket);
-                return None;
+        Destination::Socket(socket_addr) => {
+            let Some(dest_machine) = addresses.get(&socket_addr.ip()) else {
+                error!("requested destination socket {} IP is not one of the machines!", socket_addr);
+                return;
             };
-            if let Some(success) = machine.connect(destination).await {
-                let dest = Self {
-                    inner: success,
-                    machine: machine.clone(),
-                    socket_addr: socket,
-                };
-                return Some(dest);
-            };
-            debug!("failed to connect");
+            if let Some(_returned_conn_inner) = dest_machine.connect(conn.inner, socket_addr).await {
+                debug!("failed to connect to the only destination provided: {}", socket_addr);
+                return;
+            }
         },
         Destination::PortAndAddrs(port, addrs) => {
-            let sorted_machines = pick_best_ip(Some(addrs), &dest_addrs);
-            return Self::attempt_tcp_connections(sorted_machines, port).await;
+            let mut sorted_machines = pick_best_ip(Some(addrs), &addresses);
+            sorted_machines.reverse();
+            if let Err(e) = attempt_connections(conn.inner, port, sorted_machines).await {
+                debug!("failed to connect to the backend: {}", e);
+                return;
+            }
         }
         _ => {
             //error!("received connection from {} but the load balancer cannot send it to {}", co.remote_socket, conn.destination);
         }
     }
-
-    let Some(dest_conn) = DestinationConnection::negotiate_destination(conn.destination, addresses).await else {
-        return;
-    };
-
-    dest_conn.connect_to_machine(conn.inner, conn.remote_socket).await;
 }
 
-async fn negotiate_destination(conn_inner: ConnectionInner, dest_addrs: Arc<BTreeMap<IpAddr, DestinationMachine>>) -> Option<Self> {
-    match destination {
-        Destination::PortOnly(port) => {
-            trace!("got a port-only destination. attempting to find the best machine");
-            let sorted_machines = pick_best_ip(None, &dest_addrs);
-            for (ip, machine) in sorted_machines {
-                let socket_addr = SocketAddr::new(ip.clone(), port);
-                if let Some(success) = machine.connect(conn_inner) {
-                    let dest_conn = Self::new(success, machine.clone(), socket_addr);
-                    return Some(dest_conn);
-                };
-                continue;
-            }
-
-        },
-        Destination::Socket(socket) => {
-            let Some(machine) = dest_addrs.get(&socket.ip()) else {
-                warn!("requested destination socket {} IP is not one of the machines!", socket);
-                return None;
-            };
-            if let Some(success) = machine.connect(destination).await {
-                let dest = Self {
-                    inner: success,
-                    machine: machine.clone(),
-                    socket_addr: socket,
-                };
-                return Some(dest);
-            };
-            debug!("failed to connect");
-        },
-        Destination::PortAndAddrs(port, addrs) => {
-            let sorted_machines = pick_best_ip(Some(addrs), &dest_addrs);
-            return Self::attempt_tcp_connections(sorted_machines, port).await;
-        }
-        _ => {
-            //error!("received connection from {} but the load balancer cannot send it to {}", co.remote_socket, conn.destination);
-            return None;
+/// Recursive functon, keeps attempting until the list is exhausted
+async fn attempt_connections(conn_inner: ConnectionInner, port: u16, mut backend_list: Vec<(&IpAddr, &DestinationMachine)>) -> Result<()>
+{
+    // TODO: Optimise this bruh
+    let mut conn_inner_opt = Some(conn_inner);
+    while let Some((dest_ip, dest_machine)) = backend_list.pop() {
+        let Some(conn_inner) = conn_inner_opt.take() else {
+            error!("this isn't supposed to happen");
+            return Err(anyhow!("bruh"));
+        };
+        let socket_addr = SocketAddr::new(dest_ip.to_owned(), port);
+        conn_inner_opt = dest_machine.connect(conn_inner, socket_addr).await;
+        if conn_inner_opt.is_none() {
+            return Ok(())
         }
     }
-    None
+    return Err(anyhow!("ran out of available connections"))
+}
+
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+enum PortProtocol {
+    Tcp,
+    Quic
+}
+
+impl FromStr for PortProtocol {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("tcp") {
+            Ok(Self::Tcp)
+        } else if s.eq_ignore_ascii_case("quic") {
+            Ok(Self::Quic)
+        } else {
+            Err(anyhow!("didn't match any port protocols!"))
+        }
+    }
+}
+
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+struct LoadBalancerService {
+    port: u16,
+    port_protocol: PortProtocol
+}
+
+impl FromStr for LoadBalancerService {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let Some((port_str, proto_str)) = s.split_once('/') else {
+            return Err(anyhow!("failed to spit: {}", s))
+        };
+        let Ok(port) = port_str.parse() else {
+            return Err(anyhow!("failed to parse port string: {}", port_str))
+        };
+        let Ok(port_protocol) = proto_str.parse() else {
+            return Err(anyhow!("failed to parse port string: {}", proto_str))
+        };
+        Ok(Self {
+            port,
+            port_protocol,
+        })
+    }
 }
 
 struct DestinationMachineInner {
     active_connections: AtomicUsize,
+    //services_offered: BTreeMap<u8, >
     reachable: AtomicBool,
     weight: usize,
     task_tracker: TaskTracker,
@@ -186,29 +202,34 @@ impl DestinationMachine {
         }
     }
 
-    async fn connect(&self, conn_inner: ConnectionInner, socket_addr: SocketAddr) -> Option<JoinHandle<()>> {
-        match conn_inner {
+    /// Returns connection inner if failed.
+    async fn connect(&self, conn_inner: ConnectionInner, socket_addr: SocketAddr) -> Option<ConnectionInner> {
+        return match conn_inner {
             ConnectionInner::Tcp(mut remote_stream) => {
                 let Ok(tcp_conn_timeout) = TcpStream::connect(socket_addr).timeout(Duration::from_secs(5)).await else {
                     debug!("timed out making a TCP connection to {}", socket_addr);
-                    return None
+                    // Give it back
+                    return Some(ConnectionInner::Tcp(remote_stream))
                 };
                 let Ok(mut dest_stream) = tcp_conn_timeout else {
                     debug!("failed to make TCP connection to {}", socket_addr);
-                    return None
+                    return Some(ConnectionInner::Tcp(remote_stream))
                 };
-                let handle = self.inner.task_tracker.spawn(async move {
-                    let dest_span = debug_span!(LoadBalancer::SLUG_NAME, "Backend socket"=socket_addr);
+                self.inner.task_tracker.spawn(async move {
+                    let dest_span = debug_span!(LoadBalancer::SLUG_NAME, "Backend socket"=socket_addr.to_string());
                     if let Err(e) = copy_bidirectional(&mut dest_stream, &mut remote_stream).instrument(dest_span).await {
                         debug!("connection unceremoniously ended: {}", e);
                     } else {
                         trace!("connection gracefully ended");
                     };
                 });
-                return Some(handle)
+                None
             },
-            ConnectionInner::Quic => unimplemented!("QUIC not supported yet!")
-        };
+            ConnectionInner::Quic => {
+                error!("QUIC not supported yet!");
+                Some(ConnectionInner::Quic)
+            }
+        }
     }
 
     pub(crate) fn add_conn(&self) {
@@ -219,113 +240,6 @@ impl DestinationMachine {
         self.inner.active_connections.fetch_sub(1, Relaxed);
     }
 
-}
-
-pub(crate) enum DestinationConnectionInner {
-    Tcp(TcpStream),
-    Quic // not done
-}
-
-pub(crate) struct DestinationConnection {
-    inner: DestinationConnectionInner,
-    machine: DestinationMachine,
-}
-
-impl Drop for DestinationConnection {
-    fn drop(&mut self) {
-        self.machine.sub_conn();
-    }
-}
-
-impl DestinationConnection {
-    fn new(inner: DestinationConnectionInner, machine: DestinationMachine) -> Self {
-        machine.add_conn();
-        Self {
-            inner,
-            machine,
-        }
-    }
-    
-    async fn negotiate_destination(destination: Destination, dest_addrs: Arc<BTreeMap<IpAddr, DestinationMachine>>) -> Option<Self> {
-        match destination {
-            Destination::PortOnly(port) => {
-                trace!("got a port-only destination. attempting to find the best machine");
-                let sorted_machines = pick_best_ip(None, &dest_addrs);
-                return Self::attempt_tcp_connections(sorted_machines, port).await;
-            },
-
-            Destination::Socket(socket) => {
-                let Some(machine) = dest_addrs.get(&socket.ip()) else {
-                    warn!("requested destination socket {} IP is not one of the machines!", socket);
-                    return None;
-                };
-                if let Some(success) = Self::attempt_tcp_connection(&socket).await {
-                    let dest = Self {
-                        inner: success,
-                        machine: machine.clone(),
-                        socket_addr: socket,
-                    };
-                    return Some(dest);
-                };
-                debug!("failed to connect");
-            },
-            Destination::PortAndAddrs(port, addrs) => {
-                let sorted_machines = pick_best_ip(Some(addrs), &dest_addrs);
-                return Self::attempt_tcp_connections(sorted_machines, port).await;
-            }
-            _ => {
-                //error!("received connection from {} but the load balancer cannot send it to {}", co.remote_socket, conn.destination);
-                return None;
-            }
-        }
-        None
-    }
-
-    async fn attempt_tcp_connections(machines: Vec<(&IpAddr, &DestinationMachine)>, port: u16) -> Option<Self> {
-        for (ip, machine) in machines {
-            let socket_addr = SocketAddr::new(ip.clone(), port);
-            if let Some(success) = Self::attempt_tcp_connection(&socket_addr).await {
-                let dest_conn = Self::new(success, machine.clone(), socket_addr);
-                return Some(dest_conn);
-            };
-            continue;
-        }
-        None
-    }
-
-    async fn attempt_tcp_connection(socket_addr: &SocketAddr) -> Option<DestinationConnectionInner> {
-        trace!("attempting connection to {}", socket_addr);
-        let Ok(tcp_conn_timeout) = TcpStream::connect(socket_addr).timeout(Duration::from_secs(5)).await else {
-            debug!("timed out making a TCP connection to {}", socket_addr);
-            return None
-        };
-        let Ok(tcp_stream) = tcp_conn_timeout else {
-            debug!("failed to make TCP connection to {}", socket_addr);
-            return None
-        };
-        Some(DestinationConnectionInner::Tcp(tcp_stream))
-    }
-
-    async fn connect_to_machine(self, destination_connection: ConnectionInner, remote_socket: SocketAddr) {
-
-        // TODO: Allow others
-        let ConnectionInner::Tcp(mut src_conn) = destination_connection else {
-            return;
-        };
-        let DestinationConnectionInner::Tcp(mut dest_stream) = self.inner else {
-            return;
-        };
-        trace!("connecting remote {} and backend {} via TCP", remote_socket, self.socket_addr);
-        let conn_time = Instant::now();
-        self.machine.add_conn();
-        if let Err(_e) = copy_bidirectional(&mut dest_stream, &mut src_conn.tcp_stream).await {
-            // TODO: Warn: Connection broken: e
-            self.machine.sub_conn();
-            return;
-        };
-        self.machine.sub_conn();
-        trace!("connection ended gracefully between {} and {}. Took {:.2}", remote_socket, self.socket_addr, conn_time.elapsed().as_secs_f32())
-    }
 }
 
 // TODO: Looks expensive
@@ -340,6 +254,3 @@ fn pick_best_ip(provided_ip: Option<Arc<Vec<IpAddr>>>, dest_addrs: &Arc<BTreeMap
     vec.sort_unstable_by(|(_ip_a, machine_a), (_ip_b, machine_b)| machine_a.weighted_load().cmp(&machine_b.weighted_load()));
     vec
 }
-
-
-fn create_conn_list() {}

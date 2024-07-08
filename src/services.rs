@@ -10,7 +10,7 @@ use crate::connection::ForwardedConnection;
 use crate::services::gatekeeper_auth::GatekeeperAuth;
 use crate::services::load_balancer::LoadBalancer;
 use crate::services::ssh_tarpit::SshTarpit;
-use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
+use crate::utils::conn_tracker::{ConnTracker};
 
 pub(crate) mod ssh_tarpit;
 pub(crate) mod gatekeeper_auth;

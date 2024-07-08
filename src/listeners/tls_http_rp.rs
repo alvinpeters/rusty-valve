@@ -200,7 +200,7 @@ pub(crate) async fn get_backend_port(
     if let Err(e) = forward_sender.forward_conn(&InternalService::LoadBalancer, conn).await {
         debug!("Failed to send the connection from {}: {}", remote_addr, e);
     }
-    trace!("connection has been sent to the load balancer", remote_addr);
+    trace!("connection has been sent to the load balancer {}", remote_addr);
 }
 
 
@@ -239,7 +239,7 @@ async fn extract_sni_from_tls_ch(
     let mut client_hello_vec = vec![0; (ch_size) + 5];
 
     if let Err(e) = peek_timeout(&tcp_stream, &mut client_hello_vec, settings.connection_settings.timeout).await {
-        debug!("Error peeking client hello: {}" e);
+        debug!("Error peeking client hello: {}", e);
         return None;
     }
     let mut acceptor = Acceptor::default();

@@ -12,10 +12,11 @@ use tracing::{debug, info, Level, span, trace};
 use anyhow::Result;
 use clap::ArgAction::Set;
 use tokio::time::sleep;
+use tokio_util::task::TaskTracker;
 use crate::connection::{ConnectionInner, ForwardedConnection};
 use crate::services::{Service, ssh_tarpit};
 use crate::services::ssh_tarpit::bee_movie::TRANSCRIPT;
-use crate::utils::conn_tracker::{ConnTracker, TaskTracker};
+use crate::utils::conn_tracker::{ConnTracker};
 
 pub(crate) struct SshTarpitConfig {
     pub(crate) max_connections: usize,
@@ -53,15 +54,13 @@ impl Service for SshTarpit {
 
     async fn run(mut self) -> Result<()> {
         while let Some(conn) = self.forward_receiver.recv().await {
-            let _span = span!(Level::TRACE, Self::SLUG_NAME, remote=conn.remote_socket).entered();
-            let (ConnectionInner::Tcp(tcp_conn), remote_socket, b) = conn.into_inner() else {
+            let _span = span!(Level::TRACE, SshTarpit::SLUG_NAME, remote=conn.remote_socket.to_string()).entered();
+            let (ConnectionInner::Tcp(stream), remote_socket, b) = conn.into_inner() else {
                 // Not the right type, no point handling it.
                 continue;
             };
-
-            let mut stream = tcp_conn.tcp_stream;
-            self.conn_tracker.spawn_with_tracker(move |tracker| async move {
-                tarpit(tracker, stream, self.settings).await
+            self.conn_tracker.spawn(async move {
+                tarpit(stream, self.settings).await
             });
         }
 
@@ -69,18 +68,14 @@ impl Service for SshTarpit {
     }
 }
 
-async fn tarpit(conn_tracker: TaskTracker, mut tcp_stream: TcpStream, settings: Settings) {
-    if conn_tracker.current_task_count() >= settings.max_connections {
-        return;
-    }
-
+async fn tarpit(mut tcp_stream: TcpStream, settings: Settings) {
     // basically an infinite loop
     for line in TRANSCRIPT.iter().cycle() {
         if let Err(e) = tcp_stream.writable().await {
             trace!("got an error waiting for the stream to be writable: {}", e);
             break;
         }
-        if let Err(e) = tcp_stream.write(line.as_bytes()).await {
+        if let Err(e) = tcp_stream.write(line).await {
             trace!("got an error writing to the stream: {}", e);
         }
         sleep(settings.banner_repeat_time).await;

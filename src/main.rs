@@ -19,6 +19,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::config::ConfigBuilder;
 use crate::server::Server;
+use crate::utils::conn_tracker::ConnTracker;
 use crate::utils::logging::init_logger;
 
 pub(crate) mod config;
@@ -52,9 +53,9 @@ async fn main() -> Result<()> {
     // Then build config
     let mut config = config_builder.build()?;
 
-    let task_tracker = TaskTracker::new();
+    let task_tracker = ConnTracker::new();
 
-    let mut server = match Server::new(&mut config) {
+    let mut server = match Server::new(&mut config, task_tracker) {
         Ok(s) => s,
         Err(e) => {
             error!("failed to start server: {}", e);
