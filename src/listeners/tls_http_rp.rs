@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, Level, span, trace, warn};
 use rustls::server::Acceptor;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::Sender;
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 use tokio_rustls::LazyConfigAcceptor;
 use tokio_util::time::FutureExt;
 use crate::config::settings::{BindSettings, ConnectionSettings, TlsConnectionSettings};
@@ -84,9 +84,11 @@ impl ListenerHandler for TlsRpHandler {
 impl BoundListenerHandler for BoundTlsRpHandler {
     type ListenerHandler = TlsRpHandler;
 
-    async fn listen(mut self) -> Result<()> {
+    async fn listen(mut self) -> Result<Self> {
         let mut listener_set = JoinSet::new();
         while let Some(listener) = self.listeners.pop() {
+            let socket_addr = listener.local_addr().map(|a| a.to_string()).unwrap_or("N/A".to_string());
+            let span = span!(Level::TRACE, "TLS/HTTP transparent reverse proxy", socket = socket_addr);
             listener_set.spawn(
                 listen_tls(
                     listener,
@@ -97,9 +99,16 @@ impl BoundListenerHandler for BoundTlsRpHandler {
             );
         }
         while let Some(res) = listener_set.join_next().await {
-            res?
+            let listener = match res {
+                Ok(l) => l,
+                Err(e) => {
+                    error!("failed to retrieve a TCP listener! graceful halt failed!");
+                    return Err(anyhow!("failed to retrieve a TCP listener: {}", e));
+                }
+            };
+            self.listeners.push(listener);
         }
-        Ok(())
+        Ok(self)
     }
 
     fn unbind(mut self) -> Self::ListenerHandler {
@@ -121,7 +130,7 @@ pub(crate) async fn listen_tls(
     destination_provider: Arc<BTreeMap<String, PossibleDestinations>>,
     settings: TlsConnectionSettings,
     forward_sender: ServiceForwardTable,
-) {
+) -> TcpListener {
     let mut handler_set = JoinSet::new();
     info!("now listening on {}", listener.local_addr().map(|s| s.to_string()).unwrap_or("N/A".to_string()));
     loop {
@@ -139,6 +148,8 @@ pub(crate) async fn listen_tls(
             )
         );
     }
+    // return the listeners for reuse
+    listener
 }
 
 pub(crate) async fn get_backend_port(
@@ -150,7 +161,7 @@ pub(crate) async fn get_backend_port(
 ) {
     let timeout_duration = settings.connection_settings.timeout;
     // Peek the record header first, which is the first 5 bytes
-    let mut record_header = [0; 6];
+    let mut record_header = [0; 5];
     if let Err(e) = peek_timeout(&tcp_stream, &mut record_header, timeout_duration).await {
         debug!("Error peeking record header from {}: {}", remote_addr, e);
         return;
@@ -159,7 +170,6 @@ pub(crate) async fn get_backend_port(
     let name_check = if record_header[0] == 0x16 {
         extract_sni_from_tls_ch(
             record_header,
-            &remote_addr,
             &tcp_stream,
             &settings
         ).await
@@ -190,20 +200,19 @@ pub(crate) async fn get_backend_port(
     if let Err(e) = forward_sender.forward_conn(&InternalService::LoadBalancer, conn).await {
         debug!("Failed to send the connection from {}: {}", remote_addr, e);
     }
-    trace!("remote {} has been sent to the load balancer", remote_addr);
+    trace!("connection has been sent to the load balancer {}", remote_addr);
 }
 
+
 async fn extract_sni_from_tls_ch(
-    record_header: [u8; 6],
-    remote_addr: &SocketAddr,
+    record_header: [u8; 5],
     tcp_stream: &TcpStream,
     settings: &TlsConnectionSettings
 ) -> Option<String> {
     // TLS version byte 1
     // SSL 3.0 and above only
     if record_header[1] != 0x03 {
-        debug!("TCP connection from {} dropped", remote_addr);
-        debug!("Expected SSL 3.0 byte ({:#04x}), found ({:#04x})",
+        debug!("dropped connection. expected SSL 3.0 byte ({:#04x}), found ({:#04x})",
             0x03,
             record_header[1]
         );
@@ -213,8 +222,7 @@ async fn extract_sni_from_tls_ch(
     // TLS version byte 2
     // TLS 1.0 (for compatibility, not supported by rustls) TLS 1.2, TLS 1.3
     if ! [0x01, 0x03, 0x04].contains(&record_header[2]) {
-        debug!("TCP connection from {} dropped", remote_addr);
-        debug!("Expected TLS 1.0 compatibility ({:#04x}), TLS 1.2 byte ({:#04x}), or TLS 1.3 ({:#04x}) byte, found ({:#04x})",
+        debug!("dropped connection. expected TLS 1.0 compatibility ({:#04x}), TLS 1.2 byte ({:#04x}), or TLS 1.3 ({:#04x}) byte, found ({:#04x})",
             0x01,
             0x03,
             0x04,
@@ -231,15 +239,24 @@ async fn extract_sni_from_tls_ch(
     let mut client_hello_vec = vec![0; (ch_size) + 5];
 
     if let Err(e) = peek_timeout(&tcp_stream, &mut client_hello_vec, settings.connection_settings.timeout).await {
-        debug!("Error peeking client hello from {}: {}", remote_addr, e);
+        debug!("Error peeking client hello: {}", e);
         return None;
     }
-    let mut client_hello_buf = Cursor::new(client_hello_vec);
-    let Ok(lazy_acceptor) = LazyConfigAcceptor::new(Acceptor::default(), client_hello_buf).await else {
-        debug!("Failed accepting client hello from {}", remote_addr);
+    let mut acceptor = Acceptor::default();
+    let mut cursor = Cursor::new(client_hello_vec);
+    if let Err(e) = acceptor.read_tls(&mut cursor) {
+        debug!("failed to accept");
+        return None;
+    }
+    let Ok(accepted) = acceptor.accept() else {
+        debug!("failed to be accepted");
         return None;
     };
-    let client_hello = lazy_acceptor.client_hello();
+    let Some(accepted) = accepted else {
+        debug!("failed to be accepted2");
+        return None;
+    };
+    let client_hello = accepted.client_hello();
     if let Some(name) = client_hello.server_name() {
         trace!("found host from TLS SNI: {}", name);
         Some(name.to_owned())

@@ -78,7 +78,7 @@ impl ListenerHandler for SimpleTcpHandler {
 impl BoundListenerHandler for BoundSimpleTcpHandler {
     type ListenerHandler = SimpleTcpHandler;
 
-    async fn listen(mut self) -> Result<()> {
+    async fn listen(mut self) -> Result<Self> {
         let mut listener_set = JoinSet::new();
         while let Some((listener, (src_port, dest))) = self.listeners.pop() {
             info!("now listening on {}", listener.local_addr().map(|a| a.to_string()).unwrap_or("N/A".to_string()));
@@ -98,7 +98,7 @@ impl BoundListenerHandler for BoundSimpleTcpHandler {
             };
             self.listeners.push((listener, (src_port, dest)));
         }
-        Ok(())
+        Ok(self)
     }
 
     fn unbind(mut self) -> Self::ListenerHandler {

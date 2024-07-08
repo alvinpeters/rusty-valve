@@ -10,6 +10,7 @@ use tokio::signal::unix::SignalKind;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, Subscriber, trace, warn};
 use tracing_subscriber::{filter, Layer, Registry};
 use tracing_subscriber::fmt::format::{Format, Pretty};
@@ -18,6 +19,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::config::ConfigBuilder;
 use crate::server::Server;
+use crate::utils::conn_tracker::ConnTracker;
 use crate::utils::logging::init_logger;
 
 pub(crate) mod config;
@@ -51,8 +53,9 @@ async fn main() -> Result<()> {
     // Then build config
     let mut config = config_builder.build()?;
 
+    let task_tracker = ConnTracker::new();
 
-    let mut server = match Server::new(&mut config) {
+    let mut server = match Server::new(&mut config, task_tracker) {
         Ok(s) => s,
         Err(e) => {
             error!("failed to start server: {}", e);

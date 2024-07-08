@@ -14,7 +14,7 @@ load_balancer = []
 [dependencies]
 # Async
 tokio = { version = "1.38.0", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "signal", "sync", "io-std"]}
-tokio-util = { version = "0.7.11", features = ["time"]}
+tokio-util = { version = "0.7.11", features = ["time", "rt"]}
 # Config
 configparser = "3.1.0"
 clap = { version = "4.5.8", features = ["derive"] }
@@ -32,6 +32,7 @@ tokio-rustls = "0.26.0"
 # quinn for QUIC
 quinn = "0.11.2"
 indexset = "0.4.0"
+surge-ping = "0.8.1"
 
 # HTTP client for the embedded certbot
 
