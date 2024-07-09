@@ -302,7 +302,7 @@ async fn extract_host_from_http_header(
         let (name, _port) = value.trim().rsplit_once(':').unwrap_or((value, ""));
         // matched here
         trace!("found host from HTTP header: {}", name);
-        return Some(name.to_owned());
+        return Some(name.trim().to_owned());
     }
     None
 }

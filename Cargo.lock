@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-valve"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",
