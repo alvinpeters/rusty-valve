@@ -1,0 +1,50 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build_linux:
+    name: Build for Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "linux"
+      - name: Build
+        run: |
+          cargo build --release
+          mv ./target/release/rusty-valve ./rusty-valve-linux_x86_64
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./rusty-valve-linux_x86_64
+      
+  build_freebsd:
+    name: Build for FreeBSD
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "freebsd"
+      - name: Test in FreeBSD
+        id: test
+        uses: vmactions/freebsd-vm@v1
+        with:
+          envs: 'MYTOKEN MYTOKEN2'
+          usesh: true
+          prepare: |
+            pkg install -y rust cmake cmake-core
+          run: |
+            cargo build --release
+            mv ./target/release/rusty-valve ./rusty-valve-freebsd_x86_64
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./rusty-valve-freebsd_x86_64
