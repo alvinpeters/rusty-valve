@@ -52,7 +52,7 @@ impl Service for SshTarpit {
         Ok(ssh_tarpit)
     }
 
-    async fn run(mut self) -> Result<()> {
+    async fn run(mut self) -> Result<Self> {
         while let Some(conn) = self.forward_receiver.recv().await {
             let _span = span!(Level::TRACE, SshTarpit::SLUG_NAME, remote=conn.remote_socket.to_string()).entered();
             let (ConnectionInner::Tcp(stream), remote_socket, b) = conn.into_inner() else {
@@ -64,7 +64,7 @@ impl Service for SshTarpit {
             });
         }
 
-        Ok(())
+        Ok(self)
     }
 }
 

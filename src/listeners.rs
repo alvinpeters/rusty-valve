@@ -4,7 +4,7 @@ use anyhow::Result;
 use tokio::sync::mpsc::Sender;
 
 pub(crate) mod tcp_rp;
-pub(crate) mod tls_http_rp;
+pub(crate) mod transparent_rp;
 mod quic_rp;
 
 pub(crate) trait ListenerHandler {

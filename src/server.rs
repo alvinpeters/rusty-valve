@@ -13,7 +13,7 @@ use crate::config::settings::BindSettings;
 use crate::connection::ForwardedConnection;
 use crate::listeners::{BoundListenerHandler, ListenerHandler};
 use crate::listeners::tcp_rp::{BoundSimpleTcpHandler, SimpleTcpHandler};
-use crate::listeners::tls_http_rp::{BoundTlsRpHandler, TlsRpHandler};
+use crate::listeners::transparent_rp::{BoundTlsRpHandler, TlsRpHandler};
 use crate::services::{InternalService, Service, ServiceForwardTable, ServiceForwardTableBuilder};
 use crate::services::load_balancer::LoadBalancer;
 use crate::utils::conn_tracker::ConnTracker;

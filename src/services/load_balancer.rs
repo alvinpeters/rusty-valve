@@ -51,7 +51,7 @@ impl Service for LoadBalancer {
         Ok(load_balancer)
     }
 
-    async fn run(mut self) -> Result<()> {
+    async fn run(mut self) -> Result<Self> {
         while let Some(conn) = self.conn_receiver.recv().await {
             let machines = self.machines.clone();
             self.conn_tracker.spawn(async move {
@@ -60,7 +60,7 @@ impl Service for LoadBalancer {
                 handle_connection(conn, machines).instrument(span).await;
             });
         }
-        Ok(())
+        Ok(self)
     }
 }
 
@@ -165,8 +165,8 @@ impl FromStr for LoadBalancerService {
 }
 
 struct DestinationMachineInner {
-    active_connections: AtomicUsize,
-    //services_offered: BTreeMap<u8, >
+    active_connections_by_peers: AtomicUsize,
+    //services_offered: BTreeMap<u8, AtomicBool>
     reachable: AtomicBool,
     weight: usize,
     task_tracker: TaskTracker,
@@ -180,7 +180,7 @@ pub(crate) struct DestinationMachine {
 impl DestinationMachine {
     pub(crate) fn new(weight: usize) -> Self {
         let inner = DestinationMachineInner {
-            active_connections: Default::default(),
+            active_connections_by_peers: Default::default(),
             reachable: Default::default(),
             weight,
             task_tracker: TaskTracker::new()
@@ -196,7 +196,7 @@ impl DestinationMachine {
 
     pub(crate) fn weighted_load(&self) -> usize {
         if self.available() {
-            self.inner.task_tracker.len() * self.inner.weight
+            (self.inner.task_tracker.len() + self.inner.active_connections_by_peers.load(Acquire)) * self.inner.weight
         } else {
             usize::MAX
         }
@@ -233,11 +233,11 @@ impl DestinationMachine {
     }
 
     pub(crate) fn add_conn(&self) {
-        self.inner.active_connections.fetch_add(1, Relaxed);
+        self.inner.active_connections_by_peers.fetch_add(1, Relaxed);
     }
 
     pub(crate) fn sub_conn(&self) {
-        self.inner.active_connections.fetch_sub(1, Relaxed);
+        self.inner.active_connections_by_peers.fetch_sub(1, Relaxed);
     }
 
 }

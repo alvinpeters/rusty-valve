@@ -59,7 +59,7 @@ pub(crate) trait Service: Sized {
 
     fn new(config: Self::Config, forward_receiver: Receiver<ForwardedConnection>, task_tracker: ConnTracker)
            -> Result<Self>;
-    async fn run(self) -> Result<()>
+    async fn run(self) -> Result<Self>
     ;
 }
 

@@ -1,6 +1,10 @@
+mod webpage;
+
+use std::net::{IpAddr, TcpStream};
 use tokio::sync::mpsc::Receiver;
 use anyhow::Result;
-use crate::connection::ForwardedConnection;
+use tracing::error;
+use crate::connection::{ConnectionInner, ForwardedConnection};
 use crate::services::Service;
 use crate::utils::conn_tracker::ConnTracker;
 
@@ -20,7 +24,18 @@ impl Service for GatekeeperAuth {
         })
     }
 
-    async fn run(self) -> Result<()> {
-        todo!()
+    async fn run(mut self) -> Result<Self> {
+        while let Some(conn) = self.forward_receiver.recv().await {
+            let ConnectionInner::Tcp(stream) = conn.inner else {
+                error!("not tcp");
+                continue;
+            };
+
+        }
+        Ok(self)
     }
+}
+
+async fn handle_connection(tcp_stream: TcpStream, ip_addr: IpAddr) {
+
 }

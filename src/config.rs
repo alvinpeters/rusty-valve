@@ -17,7 +17,7 @@ use crate::config::ini_file::{ConfigSection, get_parser, HasConfigSection, TryFr
 use crate::config::settings::{BindSettings, ConnectionSettings, TlsConnectionSettings};
 use crate::connection::{Destination, PossibleDestinations};
 use crate::listeners::tcp_rp::SimpleTcpHandlerConfig;
-use crate::listeners::tls_http_rp::TlsRpHandlerConfig;
+use crate::listeners::transparent_rp::TlsRpHandlerConfig;
 use crate::server::ServerSettings;
 use crate::services::load_balancer::LoadBalancerConfig;
 use crate::services::ssh_tarpit::SshTarpitConfig;

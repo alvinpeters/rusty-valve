@@ -1,6 +1,4 @@
 #!/bin/sh
-#
-#
 
 # PROVIDE: rusty_valve
 # REQUIRE: DAEMON

@@ -18,7 +18,7 @@ impl Service for EmbeddedCertbot {
         todo!()
     }
 
-    async fn run(self) -> Result<()> {
+    async fn run(self) -> Result<Self> {
         todo!()
     }
 }

@@ -193,6 +193,13 @@ pub(crate) async fn get_backend_port(
         debug!("remote {} provided '{}' which is not on the list", remote_addr, name);
         return;
     };
+    if let Destination::InternalService(service) = res.get_only_destination() {
+        let conn = ForwardedConnection::new_tcp_conn(tcp_stream, remote_addr, settings.connection_settings, Destination::InternalService(service.to_owned()));
+        if let Err(e) = forward_sender.forward_conn(&service, conn).await {
+            debug!("Failed to send the connection from {}: {}", remote_addr, e);
+        }
+        return;
+    }
     let dest =  res.get_only_destination().clone();
     let conn = ForwardedConnection::new_tcp_conn(tcp_stream, remote_addr, settings.connection_settings, dest);
     // Send it to the server thread for forwarding

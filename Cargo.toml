@@ -2,7 +2,7 @@
 name = "rusty-valve"
 authors = ["Alvin Peters <me@alvinpeters.dev>"]
 repository = "https://github.com/alvinpeters/rusty-valve"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [features]
@@ -33,6 +33,8 @@ tokio-rustls = "0.26.0"
 quinn = "0.11.2"
 indexset = "0.4.0"
 surge-ping = "0.8.1"
+# leptos, hyper for web page
+leptos = { version = "0.6.12", features = ["ssr", "tracing"], default-features = false}
 
 # HTTP client for the embedded certbot
 
